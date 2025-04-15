@@ -13,7 +13,6 @@ class Bet(models.Model):
     description = models.TextField(blank=True)
     option_one = models.CharField(max_length=100)
     option_two = models.CharField(max_length=100)
-    stake = models.DecimalField(max_digits=10, decimal_places=2)
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     is_resolved = models.BooleanField(default=False)
@@ -34,6 +33,7 @@ class BetParticipant(models.Model):
         on_delete=models.CASCADE,
         related_name="participants"
     )
+    stake = models.DecimalField(max_digits=10, decimal_places=2)
     chosen_option = models.CharField(max_length=100)
     joined_at = models.DateTimeField(auto_now_add=True)
 
