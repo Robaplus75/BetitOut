@@ -1,5 +1,5 @@
 from django.urls import path
-from .schema import schema
+from .schema.schema import schema
 from graphene_django.views import GraphQLView
 
 urlpatterns = [
