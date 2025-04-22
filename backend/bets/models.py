@@ -14,6 +14,7 @@ class Bet(models.Model):
     option_one = models.CharField(max_length=100)
     option_two = models.CharField(max_length=100)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
     expires_at = models.DateTimeField()
     is_resolved = models.BooleanField(default=False)
     winner_option = models.CharField(max_length=100, blank=True, null=True)
