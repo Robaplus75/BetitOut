@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 
 User = get_user_model()
 
@@ -11,38 +12,71 @@ class Bet(models.Model):
     )
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
-    option_one = models.CharField(max_length=100)
-    option_two = models.CharField(max_length=100)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     expires_at = models.DateTimeField()
     is_resolved = models.BooleanField(default=False)
-    winner_option = models.CharField(max_length=100, blank=True, null=True)
+    winner_option = models.ForeignKey(
+        'BetOption',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='winning_bets'
+    )
+
+    def clean(self):
+        if self.options.count() < 2:
+            raise ValidationError("A bet must have at least two options.")
+        if len(set(option.text for option in self.options.all())) != len(self.options.all()):
+            raise ValidationError("Bet options must be unique.")
 
     def __str__(self):
         return f"{self.title} ({self.creator.username})"
+
+class BetOption(models.Model):
+    bet = models.ForeignKey(
+        Bet,
+        on_delete=models.CASCADE,
+        related_name='options'
+    )
+    text = models.CharField(max_length=100)
+
+    def __str__(self):
+        return f"{self.text} (Bet: {self.bet.title})"
 
 
 class BetParticipant(models.Model):
     user = models.ForeignKey(
         User,
-        on_delete=models.CASCADE,
+        on_delete=models.DO_NOTHING,
         related_name="joined_bets"
     )
     bet = models.ForeignKey(
         Bet,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="participants"
     )
     stake = models.DecimalField(max_digits=10, decimal_places=2)
-    chosen_option = models.CharField(max_length=100)
+    chosen_option = models.ForeignKey(
+        BetOption,
+        on_delete=models.PROTECT,
+        related_name="participants"
+    )
     joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = ('user', 'bet')
 
+    def clean(self):
+        if self.chosen_option.bet_id != self.bet_id:
+            raise ValidationError("The chosen option does not belong to the selected bet.")
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return f"{self.user.username} chose {self.chosen_option} on {self.bet.title}"
+        return f"{self.user.username} chose {self.chosen_option.text} for ${self.stake} on {self.bet.title}"
 
 
 class Wallet(models.Model):
