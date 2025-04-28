@@ -1,10 +1,11 @@
 import graphene
-from .types import BetType
+from .types import BetType, BetParticipantType
 from django.contrib.auth import get_user_model
 from ..models import Bet, BetOption, BetParticipant
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 import logging
+from django.db import transaction
 
 # Set up loggers for debugging and error tracking
 debug_logger = logging.getLogger("debugger")
@@ -214,8 +215,75 @@ class DeleteBetMutation(graphene.Mutation):
             logger.error(f"Unexpected error while deleting Bet ID {bet_id}: {str(e)}", exc_info=True)
             return DeleteBetMutation(success=False, message="Unexpected error occurred.")
 
+class CreateBetParticipant(graphene.Mutation):
+    class Arguments:
+        user_id = graphene.ID(required=True)
+        bet_id = graphene.ID(required=True)
+        stake = graphene.Decimal(required=True)
+        bet_option_id = graphene.ID(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+    bet_participant = graphene.Field(BetParticipantType)
+
+    @classmethod
+    def mutate(cls, root, info, user_id, bet_id, stake, bet_option_id):
+        try:
+            user = User.objects.get(pk=user_id)
+            bet = Bet.objects.get(pk=bet_id)
+            betOption = BetOption.objects.get(pk=bet_option_id)
+
+            # Check if the bet is resolved
+            if bet.is_resolved:
+                return CreateBetParticipant(success=False, message="This bet has already been resolved.", bet_participant=None)
+
+            # Check if it's expired
+            if bet.expires_at < timezone.now():
+                return CreateBetParticipant(success=False, message="This bet has expired.", bet_participant=None)
+
+            # Check if the option belongs to the right bet
+            if betOption.bet_id != bet.id:
+                return CreateBetParticipant(success=False, message="This option does not belong to the selected bet.", bet_participant=None)
+
+            # Check if stake is valid
+            if stake <= 0:
+                return CreateBetParticipant(success=False, message="Stake must be greater than 0.", bet_participant=None)
+
+            with transaction.atomic():
+                betparticipant = BetParticipant.objects.create(
+                    user=user,
+                    bet=bet,
+                    chosen_option=betOption,
+                    stake=stake
+                )
+            debug_logger.debug("Bet Participant Created Successfully")
+
+            return CreateBetParticipant(success=True, message=None, bet_participant=betparticipant)
+
+        except User.DoesNotExist:
+            logger.error(f"CreateBetParticipant: user not found: {user_id}, bet_id: {bet_id}")
+            return CreateBetParticipant(success=False, message="User not found.", bet_participant=None)
+        except Bet.DoesNotExist:
+            logger.error(f"CreateBetParticipant: bet not found: {bet_id}")
+            return CreateBetParticipant(success=False, message="Bet not found.", bet_participant=None)
+        except BetOption.DoesNotExist:
+            logger.error(f"CreateBetParticipant: betOption not found: {bet_option_id}")
+            return CreateBetParticipant(success=False, message="BetOption not found.", bet_participant=None)
+        except IntegrityError:
+            logger.error(f"Integrity error while creating BetParticipant")
+            return CreateBetParticipant(success=False, message="Database integrity error.", bet_participant=None)
+        except TransactionManagementError:
+            logger.error(f"Error managing transaction while creating BetParticipant")
+            return CreateBetParticipant(success=False, message="Transaction management error.", bet_participant=None)
+        except Exception as e:
+            logger.error(f"Unexpected error while creating a bet Participant: {str(e)}", exc_info=True)
+            return CreateBetParticipant(success=False, message="Unexpected error occurred.", bet_participant=None)
+
+
+
 # Register mutations in the schema
 class Mutation(graphene.ObjectType):
     create_bet = CreateBetMutation.Field(name="Bet_Create")
     update_bet = UpdateBetMutation.Field(name="Bet_Update")
     delete_bet = DeleteBetMutation.Field(name="Bet_Delete")
+    create_bet_participant = CreateBetParticipant.Field(name="Bet_Participant_Create")
