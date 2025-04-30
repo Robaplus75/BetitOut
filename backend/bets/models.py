@@ -23,6 +23,11 @@ class Bet(models.Model):
         blank=True,
         related_name='winning_bets'
     )
+    judge = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        related_name='judged_bets'
+    )
 
     def clean(self):
         if self.options.count() < 2:

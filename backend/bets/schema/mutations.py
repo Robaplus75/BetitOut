@@ -20,6 +20,7 @@ class CreateBetMutation(graphene.Mutation):
         description = graphene.String(required=True)
         options = graphene.List(graphene.String, required=True)
         expires_at = graphene.String(required=True)
+        judge_id = graphene.ID(required=True)
 
     bet = graphene.Field(BetType)
     success = graphene.Boolean()
@@ -30,8 +31,13 @@ class CreateBetMutation(graphene.Mutation):
         try:
             debug_logger.debug(f"CreateBet called with data: {kwargs}")
 
+            # get the creator user
             user = User.objects.get(pk=kwargs.get('creator_id'))
             debug_logger.debug(f"User found: {user.username}")
+
+            # get the judge user
+            judge = User.objects.get(pk=kwargs.get('judge_id'))
+            debug_logger.debug(f"Judge found: {judge.username}")
 
             # Parse and validate the datetime
             try:
@@ -79,6 +85,7 @@ class CreateBetMutation(graphene.Mutation):
             # Create the bet
             bet = Bet.objects.create(
                 creator=user,
+                judge=judge,
                 title=title,
                 description=description,
                 expires_at=expires_at_dt
@@ -94,7 +101,7 @@ class CreateBetMutation(graphene.Mutation):
             return CreateBetMutation(bet=bet, success=True, message=None)
 
         except User.DoesNotExist:
-            logger.error(f"User not found with id {kwargs.get('creator_id')}")
+            logger.error(f"User or Judge not found with id {kwargs.get('creator_id')} or {kwargs.get('judge_id')}")
             return CreateBetMutation(bet=None, success=False, message="User Not Found.")
 
         except Exception as e:
@@ -233,9 +240,19 @@ class CreateBetParticipant(graphene.Mutation):
             bet = Bet.objects.get(pk=bet_id)
             betOption = BetOption.objects.get(pk=bet_option_id)
 
+            # Check if user is not the judge
+            if bet.judge_id == user.id:
+                return CreateBetParticipant(
+                    success=False,
+                    message="The judge cannot participate in the bet.",
+                    bet_participant=None
+                )
             # Check if the bet is resolved
             if bet.is_resolved:
                 return CreateBetParticipant(success=False, message="This bet has already been resolved.", bet_participant=None)
+
+            if BetParticipant.objects.filter(bet=bet, user=user).exists():
+                return CreateBetParticipant(success=False, message="User has already participated in this bet.", bet_participant=None)
 
             # Check if it's expired
             if bet.expires_at < timezone.now():
