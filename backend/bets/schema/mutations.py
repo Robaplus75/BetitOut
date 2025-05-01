@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from ..models import Bet, BetOption, BetParticipant
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
+from decimal import Decimal
 import logging
 from django.db import transaction
 
@@ -146,6 +147,26 @@ class UpdateBetMutation(graphene.Mutation):
                 bet.description = kwargs.get('description').strip()
                 updated_fields.append("description")
 
+            # Update expiration if provided
+            if kwargs.get("expires_at"):
+                try:
+                    expires_at_dt = parse_datetime(kwargs.get("expires_at"))
+                except ValueError:
+                    logger.error("Invalid datetime received while updating bet.")
+                    return UpdateBetMutation(success=False, message="Invalid datetime format. Use ISO 8601 format like '2025-04-25T15:30:00Z'.", bet=None)
+
+                if not expires_at_dt:
+                    logger.error("Datetime parsing failed while updating bet.")
+                    return UpdateBetMutation(success=False, message="Invalid datetime format.", bet=None)
+
+                if timezone.is_naive(expires_at_dt):
+                    expires_at_dt = timezone.make_aware(expires_at_dt)
+                if expires_at_dt <= timezone.now():
+                    return UpdateBetMutation(success=False, message="Expiry date must be in the future.", bet=None)
+
+                bet.expires_at = expires_at_dt
+                updated_fields.append("expires_at")
+
             # Update options if provided and valid
             if kwargs.get("options"):
                 options = kwargs.get("options", [])
@@ -167,26 +188,6 @@ class UpdateBetMutation(graphene.Mutation):
                 for option_text in options:
                     BetOption.objects.create(bet=bet, text=option_text)
                 debug_logger.debug(f"Updated options for Bet ID {bet.id}: {options}")
-
-            # Update expiration if provided
-            if kwargs.get("expires_at"):
-                try:
-                    expires_at_dt = parse_datetime(kwargs.get("expires_at"))
-                except ValueError:
-                    logger.error("Invalid datetime received while updating bet.")
-                    return UpdateBetMutation(success=False, message="Invalid datetime format. Use ISO 8601 format like '2025-04-25T15:30:00Z'.", bet=None)
-
-                if not expires_at_dt:
-                    logger.error("Datetime parsing failed while updating bet.")
-                    return UpdateBetMutation(success=False, message="Invalid datetime format.", bet=None)
-
-                if timezone.is_naive(expires_at_dt):
-                    expires_at_dt = timezone.make_aware(expires_at_dt)
-                if expires_at_dt <= timezone.now():
-                    return UpdateBetMutation(success=False, message="Expiry date must be in the future.", bet=None)
-
-                bet.expires_at = expires_at_dt
-                updated_fields.append("expires_at")
 
             bet.save(update_fields=updated_fields)
             debug_logger.debug(f"Bet Updated Successfully: {bet}")
@@ -263,6 +264,7 @@ class CreateBetParticipant(graphene.Mutation):
                 return CreateBetParticipant(success=False, message="This option does not belong to the selected bet.", bet_participant=None)
 
             # Check if stake is valid
+            stake = Decimal(stake)
             if stake <= 0:
                 return CreateBetParticipant(success=False, message="Stake must be greater than 0.", bet_participant=None)
 
@@ -297,6 +299,64 @@ class CreateBetParticipant(graphene.Mutation):
             return CreateBetParticipant(success=False, message="Unexpected error occurred.", bet_participant=None)
 
 
+class ResolveBetMutation(graphene.Mutation):
+    class Arguments:
+        judge_id = graphene.ID(required=True)
+        bet_id = graphene.ID(required=True)
+        winning_option_id = graphene.ID(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+    bet = graphene.Field(BetType)
+
+    @classmethod
+    def mutate(cls, root, info, judge_id, bet_id, winning_option_id):
+        try:
+            judge = User.objects.get(pk=judge_id)
+            bet = Bet.objects.get(pk=bet_id)
+            winning_option = BetOption.objects.get(pk=winning_option_id)
+
+            if bet.judge_id != judge.id:
+                debug_logger.debug(f"User {judge.id} attempted to resolve bet {bet.id} but is not the judge.")
+                return ResolveBetMutation(success=False, message="Only the judge can resolve this bet.", bet=None)
+
+            if bet.is_resolved:
+                debug_logger.debug(f"Bet {bet.id} already resolved.")
+                return ResolveBetMutation(success=False, message="This bet is already resolved.", bet=None)
+
+            if winning_option.bet_id != bet.id:
+                debug_logger.debug(f"Option {winning_option.id} does not belong to Bet {bet.id}.")
+                return ResolveBetMutation(success=False, message="Selected option does not belong to this bet.", bet=None)
+
+            bet.is_resolved = True
+            bet.winner_option = winning_option
+            bet.resolved_at = timezone.now()
+            bet.save(update_fields=["is_resolved", "winner_option", "resolved_at"])
+
+            debug_logger.debug(
+                f"Bet {bet.id} resolved successfully by judge {judge.username}. "
+                f"Winning option: {winning_option.id} - '{winning_option.text}'"
+            )
+
+            return ResolveBetMutation(success=True, message="Bet resolved successfully.", bet=bet)
+
+        except User.DoesNotExist:
+            logger.warning(f"Judge with ID {judge_id} not found while resolving bet {bet_id}.")
+            return ResolveBetMutation(success=False, message="Judge not found.", bet=None)
+
+        except Bet.DoesNotExist:
+            logger.warning(f"Bet with ID {bet_id} not found.")
+            return ResolveBetMutation(success=False, message="Bet not found.", bet=None)
+
+        except BetOption.DoesNotExist:
+            logger.warning(f"Option with ID {winning_option_id} not found while resolving bet {bet_id}.")
+            return ResolveBetMutation(success=False, message="Winning option not found.", bet=None)
+
+        except Exception as e:
+            logger.error(f"Unexpected error while resolving bet {bet_id}: {str(e)}", exc_info=True)
+            return ResolveBetMutation(success=False, message="Unexpected error occurred.", bet=None)
+
+
 
 # Register mutations in the schema
 class Mutation(graphene.ObjectType):
@@ -304,3 +364,4 @@ class Mutation(graphene.ObjectType):
     update_bet = UpdateBetMutation.Field(name="Bet_Update")
     delete_bet = DeleteBetMutation.Field(name="Bet_Delete")
     create_bet_participant = CreateBetParticipant.Field(name="Bet_Participant_Create")
+    resolve_bet = ResolveBetMutation.Field(name="Bet_Resolve")

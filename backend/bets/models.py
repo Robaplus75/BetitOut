@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 User = get_user_model()
 
@@ -16,6 +17,7 @@ class Bet(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     expires_at = models.DateTimeField()
     is_resolved = models.BooleanField(default=False)
+    resolved_at = models.DateTimeField(null=True, blank=True)
     winner_option = models.ForeignKey(
         'BetOption',
         on_delete=models.SET_NULL,
@@ -28,6 +30,18 @@ class Bet(models.Model):
         on_delete=models.PROTECT,
         related_name='judged_bets'
     )
+
+    def resolve(self, winner_option):
+        if self.is_resolved:
+            raise ValidationError("Bet is already resolved.")
+        if winner_option not in self.options.all():
+            raise ValidationError("Winner option must belong to this bet.")
+
+        self.winner_option = winner_option
+        self.is_resolved = True
+        self.resolved_at = timezone.now()
+        self.save()
+
 
     def clean(self):
         if self.options.count() < 2:
