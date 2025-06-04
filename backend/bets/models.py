@@ -98,13 +98,3 @@ class BetParticipant(models.Model):
         return f"{self.user.username} chose {self.chosen_option.text} for ${self.stake} on {self.bet.title}"
 
 
-class Wallet(models.Model):
-    user = models.OneToOneField(
-        User,
-        on_delete=models.CASCADE
-    )
-    balance = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-
-    def __str__(self):
-        return f"{self.user.username} — ${self.balance}"
-
